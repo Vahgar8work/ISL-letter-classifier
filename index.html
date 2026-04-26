@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ISL to Speech</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&display=swap" rel="stylesheet">
+<!-- ORT must be a synchronous (no defer/async) script so window.ort exists before the module runs -->
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<style>
+:root, [data-theme="dark"] {
+  --color-bg:           #111110;
+  --color-surface:      #1a1917;
+  --color-surface-2:    #222120;
+  --color-border:       rgba(255,255,255,0.08);
+  --color-text:         #d4d3d0;
+  --color-text-muted:   #7a7876;
+  --color-text-faint:   #44433f;
+  --color-primary:      #4f98a3;
+  --color-primary-dim:  rgba(79,152,163,0.15);
+  --color-success:      #6daa45;
+  --color-gold:         #e8af34;
+  --color-warning:      #dd6974;
+  --radius-md:          0.5rem;
+  --radius-lg:          0.75rem;
+  --radius-xl:          1rem;
+  --transition:         180ms cubic-bezier(.16,1,.3,1);
+  --shadow-md:          0 4px 16px rgba(0,0,0,0.35);
+}
+[data-theme="light"] {
+  --color-bg:           #f5f4f0;
+  --color-surface:      #ffffff;
+  --color-surface-2:    #f0efeb;
+  --color-border:       rgba(0,0,0,0.08);
+  --color-text:         #1c1b18;
+  --color-text-muted:   #6b6a66;
+  --color-text-faint:   #b0afab;
+  --color-primary:      #01696f;
+  --color-primary-dim:  rgba(1,105,111,0.1);
+  --color-success:      #437a22;
+  --color-gold:         #c88a00;
+  --color-warning:      #a12c7b;
+  --shadow-md:          0 4px 16px rgba(0,0,0,0.1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: none; text-size-adjust: none; -webkit-font-smoothing: antialiased; }
+body { min-height: 100dvh; font-family: 'Inter', sans-serif; font-size: 1rem;
+       color: var(--color-text); background: var(--color-bg); display: flex; flex-direction: column; }
+button { cursor: pointer; background: none; border: none; font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .75rem 1.5rem; background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border); position: sticky; top: 0; z-index: 10;
+}
+.header-logo { display: flex; align-items: center; gap: .5rem;
+               font-weight: 600; font-size: 1rem; color: var(--color-text); }
+.header-logo svg { color: var(--color-primary); flex-shrink: 0; }
+.theme-btn { width: 36px; height: 36px; border-radius: var(--radius-md);
+             display: flex; align-items: center; justify-content: center;
+             color: var(--color-text-muted);
+             transition: background var(--transition), color var(--transition); }
+.theme-btn:hover { background: var(--color-surface-2); color: var(--color-text); }
+
+.main { flex: 1; display: grid; grid-template-columns: 1fr 340px; }
+@media (max-width: 860px) {
+  .main { grid-template-columns: 1fr; }
+  .side-panel { border-left: none; border-top: 1px solid var(--color-border); max-height: none; }
+}
+
+.video-panel { padding: 1.25rem; display: flex; flex-direction: column; gap: .75rem; }
+
+.video-wrapper { position: relative; width: 100%; border-radius: var(--radius-xl);
+                 overflow: hidden; background: #0a0a09; aspect-ratio: 16/9;
+                 box-shadow: var(--shadow-md); }
+#video { width: 100%; height: 100%; object-fit: cover;
+         transform: scaleX(-1); display: block; }
+#overlay { position: absolute; inset: 0; width: 100%; height: 100%;
+           pointer-events: none; transform: scaleX(-1); }
+
+#loading-overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+                   align-items: center; justify-content: center;
+                   background: rgba(10,10,9,.82); backdrop-filter: blur(4px);
+                   gap: 1rem; z-index: 5; }
+.loading-spinner { width: 36px; height: 36px; border-radius: 50%;
+                   border: 3px solid var(--color-border); border-top-color: var(--color-primary);
+                   animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading-msg { font-size: .875rem; color: var(--color-text-muted); max-width: 22ch; text-align: center; }
+
+.status-bar { display: flex; align-items: center; gap: .5rem;
+              font-size: .8125rem; color: var(--color-text-muted); padding: .25rem 0; }
+#status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+              background: var(--color-text-faint); transition: background var(--transition); }
+
+.side-panel { border-left: 1px solid var(--color-border); display: flex; flex-direction: column;
+              overflow-y: auto; max-height: calc(100dvh - 53px); }
+.side-section { padding: 1rem 1.25rem; border-bottom: 1px solid var(--color-border); }
+.side-section:last-child { border-bottom: none; flex: 1; }
+.section-label { font-size: .6875rem; font-weight: 600; letter-spacing: .07em;
+                 text-transform: uppercase; color: var(--color-text-faint); margin-bottom: .75rem; }
+
+.letter-panel { display: flex; align-items: center; gap: 1rem; }
+.hold-ring-wrap { flex-shrink: 0; }
+.ring-bg { fill: none; stroke: var(--color-border); stroke-width: 3.5; }
+/* ring-bg stroke uses a CSS variable — set as SVG attribute instead for compatibility */
+#hold-ring {
+  fill: none; stroke: var(--color-primary); stroke-width: 3.5; stroke-linecap: round;
+  stroke-dasharray: 125.66;   /* 2π × r=20 = 125.664 */
+  stroke-dashoffset: 125.66;  /* fully empty on load */
+  transform: rotate(-90deg);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: stroke-dashoffset .1s linear, stroke var(--transition);
+}
+.letter-info { flex: 1; min-width: 0; }
+#letter-display { font-size: 3.5rem; font-weight: 700; line-height: 1;
+                  letter-spacing: -.03em; transition: opacity var(--transition); }
+#letter-sub { font-size: .8125rem; color: var(--color-text-muted); margin-top: .25rem; }
+
+.conf-wrap { display: flex; flex-direction: column; gap: .4rem; }
+.conf-track { height: 5px; border-radius: 9999px; background: var(--color-surface-2); overflow: hidden; }
+#conf-bar { height: 100%; width: 0; border-radius: 9999px; background: var(--color-primary);
+            transition: width var(--transition), background var(--transition); }
+.conf-row { display: flex; justify-content: space-between; }
+.conf-label, #conf-value { font-size: .75rem; color: var(--color-text-muted); }
+
+#word-display { font-size: 1.5rem; font-weight: 600; letter-spacing: .04em;
+                min-height: 2rem; transition: opacity var(--transition); word-break: break-all; }
+
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.btn-primary { grid-column: 1 / -1; padding: .625rem 1rem; border-radius: var(--radius-md);
+               background: var(--color-primary); color: #fff; font-weight: 600; font-size: .875rem;
+               transition: opacity var(--transition); }
+.btn-primary:hover { opacity: .88; }
+.btn-primary[data-running] { background: var(--color-warning); }
+.btn-secondary { padding: .5rem .75rem; border-radius: var(--radius-md);
+                 border: 1px solid var(--color-border); font-size: .8125rem; color: var(--color-text-muted);
+                 transition: background var(--transition), color var(--transition); }
+.btn-secondary:hover { background: var(--color-surface-2); color: var(--color-text); }
+.btn-speak { grid-column: 1 / -1; padding: .5rem .75rem; border-radius: var(--radius-md);
+             border: 1px solid var(--color-primary); font-size: .8125rem; color: var(--color-primary);
+             transition: background var(--transition); }
+.btn-speak:hover { background: var(--color-primary-dim); }
+
+#history-list { display: flex; flex-direction: column; gap: .25rem; }
+.history-empty { font-size: .8125rem; color: var(--color-text-faint); }
+.history-item { display: flex; justify-content: space-between; align-items: baseline;
+                padding: .375rem .5rem; border-radius: var(--radius-md); background: var(--color-surface-2); }
+.history-word { font-size: .875rem; font-weight: 500; letter-spacing: .04em; }
+.history-time { font-size: .75rem; color: var(--color-text-muted); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M18 8h1a4 4 0 0 1 0 8h-1"/>
+      <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
+      <line x1="6" y1="1" x2="6" y2="4"/>
+      <line x1="10" y1="1" x2="10" y2="4"/>
+      <line x1="14" y1="1" x2="14" y2="4"/>
+    </svg>
+    ISL to Speech
+  </div>
+  <button class="theme-btn" data-theme-toggle aria-label="Switch to light mode">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  </button>
+</header>
+
+<main class="main">
+  <div class="video-panel">
+    <div class="video-wrapper">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="loading-overlay">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <span id="loading-msg">Initialising…</span>
+      </div>
+    </div>
+    <div class="status-bar" role="status" aria-live="polite">
+      <div id="status-dot"></div>
+      <span id="status-text">Initialising…</span>
+    </div>
+  </div>
+
+  <aside class="side-panel" aria-label="Controls and output">
+    <div class="side-section">
+      <div class="section-label">Prediction</div>
+      <div class="letter-panel">
+        <div class="hold-ring-wrap" aria-hidden="true">
+          <svg width="52" height="52" viewBox="0 0 52 52">
+            <circle class="ring-bg" cx="26" cy="26" r="20"/>
+            <circle id="hold-ring"  cx="26" cy="26" r="20"/>
+          </svg>
+        </div>
+        <div class="letter-info">
+          <div id="letter-display" aria-live="polite">—</div>
+          <div id="letter-sub">No gesture</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <div class="section-label">Confidence</div>
+      <div class="conf-wrap">
+        <div class="conf-track"><div id="conf-bar"></div></div>
+        <div class="conf-row">
+          <span class="conf-label">Score</span>
+          <span id="conf-value">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <div class="section-label">Word Buffer</div>
+      <div id="word-display" aria-live="polite">…</div>
+    </div>
+
+    <div class="side-section">
+      <div class="section-label">Controls</div>
+      <div class="controls">
+        <button id="btn-start"     class="btn-primary"   type="button">Start</button>
+        <button id="btn-speak"     class="btn-speak"     type="button">Speak now</button>
+        <button id="btn-backspace" class="btn-secondary" type="button">⌫ Backspace</button>
+        <button id="btn-clear"     class="btn-secondary" type="button">✕ Clear</button>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <div class="section-label">History</div>
+      <div id="history-list" aria-live="polite">
+        <span class="history-empty">Nothing spoken yet</span>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- ISL_CONFIG defined before the module script so window.ISL_CONFIG is set at module eval time -->
+<script>
+window.ISL_CONFIG = {
+  imgsz: 256,
+  confThreshold: 0.60,
+  marginThreshold: 0.20,
+  holdFrames: 7,
+  defaultTolerance: 2,
+  speakTrigger: 12,
+  ttsLang: 'en-US',
+  ttsRate: 0.95,
+  executionProvider: 'wasm'
+};
+</script>
+
+<script>
+(function () {
+  const root = document.documentElement;
+  const btn  = document.querySelector('[data-theme-toggle]');
+  const MOON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+  const SUN  = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>';
+  let theme  = 'dark';
+  root.setAttribute('data-theme', theme);
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', theme);
+    btn.setAttribute('aria-label', 'Switch to ' + (theme === 'dark' ? 'light' : 'dark') + ' mode');
+    btn.innerHTML = theme === 'dark' ? MOON : SUN;
+  });
+}());
+</script>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
